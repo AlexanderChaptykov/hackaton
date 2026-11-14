@@ -100,7 +100,7 @@ def build_agent(model: str, data_dir: Path):
         """Keyword search over the brand positioning document. Input: a short query."""
         scores = bm25.get_scores(tokenize(query))
         top = sorted(range(len(chunks)), key=lambda i: -scores[i])[:BM25_K]
-        hits = [f"[{BRAND_FILE} > {chunks[i][0]} #{i}]\n{chunks[i][1]}" for i in top if scores[i] > 0]
+        hits = [f"[{BRAND_FILE} > {chunks[i][0]}]\n{chunks[i][1]}" for i in top if scores[i] > 0]
         return "\n\n".join(hits) or "No matches. Try other keywords."
 
     @tool
@@ -115,13 +115,6 @@ def build_agent(model: str, data_dir: Path):
         system_prompt=SYSTEM_PROMPT,
         response_format=Strategy,
     )
-
-
-def render(strategy: Strategy) -> str:
-    out = [f"# {strategy.title}", "", strategy.summary, ""]
-    for item in strategy.body:
-        out += [item.text.strip(), "", "**Justification**", "", item.justification.strip(), ""]
-    return "\n".join(out)
 
 
 def main() -> int:
@@ -147,14 +140,10 @@ def main() -> int:
 
     result = agent.invoke({"messages": [{"role": "user", "content": request}]})
 
-    strategy = result.get("structured_response")
-    if strategy is None:
-        print("The agent finished without a strategy.", file=sys.stderr)
-        return 1
-
+    strategy: Strategy = result["structured_response"]  # the Strategy object built from the model's answer
     args.out.mkdir(parents=True, exist_ok=True)
+    (args.out / "strategy.md").write_text(strategy.to_markdown(), encoding="utf-8")
     (args.out / "strategy.json").write_text(strategy.model_dump_json(indent=2), encoding="utf-8")
-    (args.out / "strategy.md").write_text(render(strategy), encoding="utf-8")
     print(f"Wrote {args.out}/strategy.md and {args.out}/strategy.json", file=sys.stderr)
     return 0
 
