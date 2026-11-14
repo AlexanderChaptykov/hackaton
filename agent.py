@@ -1,8 +1,9 @@
 """Strategy agent: one agent, two tools, structured output.
 
-    uv run agent.py data/Nordbean     # writes output/Nordbean/strategy.{json,md}
+    uv run agent.py Nordbean          # writes output/Nordbean/strategy.{json,md}
+    uv run streamlit run app.py       # the same thing with a web page
 
-The input is a company folder holding company.md, strategies.md, products.md,
+A company is a folder under data/ holding company.md, strategies.md, products.md,
 competitors.md and brand-positioning.md.
 
 Reads OPENAI_API_KEY and OPENAI_MODEL from a .env file (see .env.example).
@@ -24,6 +25,7 @@ from rank_bm25 import BM25Okapi
 
 from schema import Strategy
 
+ROOT = Path(__file__).parent
 DATA_FILES = ["company", "strategies", "products", "competitors"]
 BRAND_FILE = "brand-positioning.md"
 BM25_K = 5
@@ -117,34 +119,49 @@ def build_agent(model: str, data_dir: Path):
     )
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description="Propose an updated strategy for one company folder")
-    ap.add_argument("data_dir", type=Path, nargs="?", default=Path("data/Nordbean"),
-                    help="company folder with the input .md files (default: data/Nordbean)")
-    ap.add_argument("--model", help=f"OpenAI model (default: OPENAI_MODEL from .env, else {DEFAULT_MODEL})")
-    ap.add_argument("--out", type=Path, help="output folder (default: output/<company folder name>)")
-    args = ap.parse_args()
-    args.out = args.out or Path("output") / args.data_dir.resolve().name
+def list_companies(data_root: Path = ROOT / "data") -> list:
+    """Names of the folders under data/ that hold a full set of input files."""
+    needed = [*(f"{t}.md" for t in DATA_FILES), BRAND_FILE]
+    return sorted(d.name for d in data_root.iterdir() if d.is_dir() and all((d / f).is_file() for f in needed))
 
-    missing = [f for f in [*(f"{t}.md" for t in DATA_FILES), BRAND_FILE] if not (args.data_dir / f).is_file()]
-    if missing:
-        sys.exit(f"Missing in {args.data_dir}: {', '.join(missing)}")
 
-    load_dotenv()
+def load_cached(company: str) -> Strategy | None:
+    """The saved strategy for this company, or None if it has not been processed yet."""
+    path = ROOT / "output" / company / "strategy.json"
+    return Strategy.model_validate_json(path.read_text(encoding="utf-8")) if path.is_file() else None
+
+
+def create_strategy(company: str, model: str | None = None) -> Strategy:
+    """Run the agent on data/<company> and save the result to output/<company>/."""
+    load_dotenv(ROOT / ".env")
     if not os.environ.get("OPENAI_API_KEY"):
-        sys.exit("OPENAI_API_KEY is not set. Put it in the .env file.")
-    model = args.model or os.environ.get("OPENAI_MODEL") or DEFAULT_MODEL
-    print(f"Model: {model}", file=sys.stderr)
-    agent = build_agent(model, args.data_dir)
+        raise RuntimeError("OPENAI_API_KEY is not set. Put it in the .env file.")
+    model = model or os.environ.get("OPENAI_MODEL") or DEFAULT_MODEL
+    agent = build_agent(model, ROOT / "data" / company)
     request = f"Today is {datetime.date.today().isoformat()}. Propose the updated strategy."
-
     result = agent.invoke({"messages": [{"role": "user", "content": request}]})
+    strategy: Strategy = result["structured_response"]
 
-    strategy: Strategy = result["structured_response"]  # the Strategy object built from the model's answer
-    args.out.mkdir(parents=True, exist_ok=True)
-    (args.out / "strategy.md").write_text(strategy.to_markdown(), encoding="utf-8")
-    (args.out / "strategy.json").write_text(strategy.model_dump_json(indent=2), encoding="utf-8")
-    print(f"Wrote {args.out}/strategy.md and {args.out}/strategy.json", file=sys.stderr)
+    out = ROOT / "output" / company
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "strategy.md").write_text(strategy.to_markdown(), encoding="utf-8")
+    (out / "strategy.json").write_text(strategy.model_dump_json(indent=2), encoding="utf-8")
+    return strategy
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="Propose an updated strategy for one company")
+    ap.add_argument("company", nargs="?", default="Nordbean", help="folder name under data/ (default: Nordbean)")
+    ap.add_argument("--model", help=f"OpenAI model (default: OPENAI_MODEL from .env, else {DEFAULT_MODEL})")
+    args = ap.parse_args()
+
+    if args.company not in list_companies():
+        sys.exit(f"No complete company folder data/{args.company}. Available: {', '.join(list_companies()) or 'none'}")
+    try:
+        create_strategy(args.company, args.model)
+    except RuntimeError as e:
+        sys.exit(str(e))
+    print(f"Wrote output/{args.company}/strategy.md and strategy.json", file=sys.stderr)
     return 0
 
 
