@@ -1,0 +1,11 @@
+[project]
+name = "strategy-agent"
+version = "0.2.0"
+description = "Proposes an updated product strategy from ./data, justified against brand-positioning.md"
+requires-python = ">=3.10"
+dependencies = [
+    "langchain>=1.4.9",
+    "langchain-openai",
+    "rank-bm25",
+    "python-dotenv",
+]
