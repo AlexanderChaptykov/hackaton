@@ -19,6 +19,7 @@ from typing import Literal
 
 from dotenv import load_dotenv
 from langchain.agents import create_agent
+from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from rank_bm25 import BM25Okapi
@@ -26,6 +27,7 @@ from rank_bm25 import BM25Okapi
 from schema import Strategy
 
 ROOT = Path(__file__).parent
+STAGES = ["Document indexing", "Tool calling", "Generating answer"]
 DATA_FILES = ["company", "strategies", "products", "competitors"]
 BRAND_FILE = "brand-positioning.md"
 BM25_K = 5
@@ -131,15 +133,38 @@ def load_cached(company: str) -> Strategy | None:
     return Strategy.model_validate_json(path.read_text(encoding="utf-8")) if path.is_file() else None
 
 
-def create_strategy(company: str, model: str | None = None) -> Strategy:
-    """Run the agent on data/<company> and save the result to output/<company>/."""
+class StageReporter(BaseCallbackHandler):
+    """Tells on_stage which entry of STAGES the agent has reached."""
+
+    def __init__(self, on_stage):
+        self.on_stage, self.tools_used = on_stage, False
+
+    def on_chat_model_start(self, *args, **kwargs):
+        # A model call after tools have run is the one that writes the answer;
+        # the first call only decides which tools to use.
+        self.on_stage(2 if self.tools_used else 1)
+
+    def on_tool_start(self, *args, **kwargs):
+        self.tools_used = True
+        self.on_stage(1)
+
+
+def create_strategy(company: str, model: str | None = None, on_stage=lambda i: None) -> Strategy:
+    """Run the agent on data/<company> and save the result to output/<company>/.
+
+    on_stage(i) is called as the run reaches STAGES[i]; it may be called from another thread.
+    """
     load_dotenv(ROOT / ".env")
     if not os.environ.get("OPENAI_API_KEY"):
         raise RuntimeError("OPENAI_API_KEY is not set. Put it in the .env file.")
     model = model or os.environ.get("OPENAI_MODEL") or DEFAULT_MODEL
+    on_stage(0)
     agent = build_agent(model, ROOT / "data" / company)
     request = f"Today is {datetime.date.today().isoformat()}. Propose the updated strategy."
-    result = agent.invoke({"messages": [{"role": "user", "content": request}]})
+    result = agent.invoke(
+        {"messages": [{"role": "user", "content": request}]},
+        config={"callbacks": [StageReporter(on_stage)]},
+    )
     strategy: Strategy = result["structured_response"]
 
     out = ROOT / "output" / company
