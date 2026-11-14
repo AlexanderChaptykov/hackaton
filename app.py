@@ -5,7 +5,7 @@
 
 import streamlit as st
 
-from agent import create_strategy, list_companies, load_cached
+from agent import ROOT, create_strategy, list_companies, load_cached
 
 st.set_page_config(page_title="Strategy agent", page_icon="📈", layout="centered")
 state = st.session_state
@@ -33,6 +33,11 @@ def select_screen() -> None:
                     return
         state.company, state.strategy = company, strategy
         st.rerun()
+
+    st.subheader("Input documents")
+    docs = sorted((ROOT / "data" / company).glob("*.md"))
+    for tab, doc in zip(st.tabs([d.stem for d in docs]), docs):
+        tab.markdown(doc.read_text(encoding="utf-8"))
 
 
 def strategy_screen() -> None:
